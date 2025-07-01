@@ -4,4 +4,4 @@ metadata:
   name: backend
   namespace: expense
 data:
-  DB_HOST: db-dev.daws78s.online
+  DB_HOST: db-dev.eswarsaikumar.site
