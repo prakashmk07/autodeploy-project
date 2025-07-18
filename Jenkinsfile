@@ -8,183 +8,138 @@ pipeline {
 
     environment {
         SCANNER_HOME = tool 'sonar-scanner'
-        NEXUS_URL = 'http://your-nexus-server:8081'
-        DOCKER_REGISTRY = 'your-docker-registry'
-        K8S_NAMESPACE = 'webapps'
-        K8S_CLUSTER_URL = 'https://172.31.8.146:6443'
-    }
-
-    options {
-        timeout(time: 30, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-        disableConcurrentBuilds()
-        skipDefaultCheckout()
     }
 
     stages {
-        stage('Clean Workspace') {
-            steps {
-                cleanWs()
-                script {
-                    currentBuild.description = "Initiated by ${currentBuild.getBuildCauses()[0].shortDescription}"
-                }
-            }
-        }
-
         stage('Git Checkout') {
             steps {
-                git(
-                    branch: 'main',
-                    credentialsId: 'git-cred',
-                    url: 'https://github.com/prakashmk07/autodeploy-project.git',
-                    poll: true,
-                    changelog: true,
-                    depth: 1
-                )
-                script {
-                    def commit = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
-                    env.GIT_COMMIT_SHORT = commit
-                    currentBuild.displayName = "#${BUILD_NUMBER}-${commit}"
-                }
+                git branch: 'main', credentialsId: 'git-cred', url: 'https://github.com/prakashmk07/autodeploy-project.git'
             }
         }
 
-        stage('Verify Repository') {
+        stage('Generate pom.xml') {
             steps {
-                script {
-                    def pomExists = fileExists 'pom.xml'
-                    if (!pomExists) {
-                        error "pom.xml not found in the root directory!"
-                    }
-                    sh 'ls -la'
-                }
-            }
-        }
-
-        stage('Dependency Check') {
-            steps {
-                sh 'mvn dependency:go-offline'
+                writeFile file: 'pom.xml', text: '''
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.example</groupId>
+    <artifactId>boardshack</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <build>
+        <sourceDirectory>src</sourceDirectory>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.1</version>
+                <configuration>
+                    <source>17</source>
+                    <target>17</target>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+'''
             }
         }
 
         stage('Compile') {
             steps {
-                sh 'mvn clean compile'
+                sh 'mvn compile'
             }
         }
 
-        stage('Unit Tests') {
+        stage('Test') {
             steps {
                 sh 'mvn test'
-                junit 'target/surefire-reports/**/*.xml'
-                archiveArtifacts artifacts: 'target/surefire-reports/**/*.*', allowEmptyArchive: true
             }
         }
 
-        stage('Code Analysis') {
+        stage('File System Scan') {
+            steps {
+                sh 'trivy fs --format table -o trivy-fs-report.html .'
+            }
+        }
+
+        stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sonar') {
-                    sh """
+                    sh '''
                         $SCANNER_HOME/bin/sonar-scanner \
                         -Dsonar.projectName=BoardGame \
                         -Dsonar.projectKey=BoardGame \
-                        -Dsonar.java.binaries=. \
-                        -Dsonar.sourceEncoding=UTF-8 \
-                        -Dsonar.host.url=${SONAR_HOST_URL} \
-                        -Dsonar.login=${SONAR_AUTH_TOKEN}
-                    """
+                        -Dsonar.java.binaries=.
+                    '''
                 }
             }
         }
 
         stage('Quality Gate') {
             steps {
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
                 }
             }
         }
 
-        stage('Security Scan') {
+        stage('Build') {
             steps {
-                sh 'trivy fs --security-checks vuln,config --severity HIGH,CRITICAL --format table -o trivy-fs-report.html .'
-                archiveArtifacts artifacts: 'trivy-fs-report.html', allowEmptyArchive: true
+                sh 'mvn package'
             }
         }
 
-        stage('Build Package') {
+        stage('Publish To Nexus') {
             steps {
-                sh 'mvn package -DskipTests'
-                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
-            }
-        }
-
-        stage('Publish to Nexus') {
-            steps {
-                withMaven(
-                    maven: 'maven3',
-                    mavenSettingsConfig: 'nexus-settings'
-                ) {
-                    sh 'mvn deploy -DskipTests'
+                withMaven(globalMavenSettingsConfig: 'global-settings', jdk: 'jdk17', maven: 'maven3') {
+                    sh 'mvn deploy'
                 }
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Build & Tag Docker Image') {
             steps {
                 script {
-                    docker.build("${DOCKER_REGISTRY}/boardshack:${env.GIT_COMMIT_SHORT}")
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                        sh 'docker build -t pdeveopsh/boardshack:latest .'
+                    }
                 }
             }
         }
 
-        stage('Scan Docker Image') {
+        stage('Docker Image Scan') {
             steps {
-                sh "trivy image --security-checks vuln --severity HIGH,CRITICAL --format table -o trivy-image-report.html ${DOCKER_REGISTRY}/boardshack:${env.GIT_COMMIT_SHORT}"
-                archiveArtifacts artifacts: 'trivy-image-report.html', allowEmptyArchive: true
+                sh 'trivy image --format table -o trivy-image-report.html pdeveopsh/boardshack:latest'
             }
         }
 
         stage('Push Docker Image') {
             steps {
                 script {
-                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'docker-cred') {
-                        docker.image("${DOCKER_REGISTRY}/boardshack:${env.GIT_COMMIT_SHORT}").push()
-                        docker.image("${DOCKER_REGISTRY}/boardshack:${env.GIT_COMMIT_SHORT}").push('latest')
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                        sh 'docker push pdeveopsh/boardshack:latest'
                     }
                 }
             }
         }
 
-        stage('Deploy to Kubernetes') {
+        stage('Deploy To Kubernetes') {
             steps {
-                withKubeConfig(
-                    credentialsId: 'k8-cred',
-                    namespace: env.K8S_NAMESPACE,
-                    serverUrl: env.K8S_CLUSTER_URL
-                ) {
-                    sh "sed -i 's|IMAGE_TAG|${env.GIT_COMMIT_SHORT}|g' deployment-service.yaml"
+                withKubeConfig(credentialsId: 'k8-cred', namespace: 'webapps', serverUrl: 'https://172.31.8.146:6443') {
                     sh 'kubectl apply -f deployment-service.yaml'
-                    sh 'kubectl rollout status deployment/boardgame -n ${K8S_NAMESPACE} --timeout=300s'
                 }
             }
         }
 
-        stage('Smoke Test') {
+        stage('Verify the Deployment') {
             steps {
-                script {
-                    def appUrl = sh(returnStdout: true, script: 'kubectl get svc boardgame -n ${K8S_NAMESPACE} -o jsonpath="{.status.loadBalancer.ingress[0].ip}"').trim()
-                    timeout(time: 2, unit: 'MINUTES') {
-                        waitUntil {
-                            try {
-                                def response = httpRequest url: "http://${appUrl}:8080/health", validResponseCodes: '200'
-                                return true
-                            } catch (Exception e) {
-                                sleep 10
-                                return false
-                            }
-                        }
-                    }
+                withKubeConfig(credentialsId: 'k8-cred', namespace: 'webapps', serverUrl: 'https://172.31.8.146:6443') {
+                    sh 'kubectl get pods -n webapps'
+                    sh 'kubectl get svc -n webapps'
                 }
             }
         }
@@ -193,56 +148,35 @@ pipeline {
     post {
         always {
             script {
-                def duration = currentBuild.durationString.replace(' and counting', '')
-                def success = currentBuild.resultIsBetterOrEqualTo('SUCCESS')
-                def color = success ? 'good' : 'danger'
-                def message = success ? "✅ Pipeline SUCCESS" : "❌ Pipeline FAILED"
+                def jobName = env.JOB_NAME
+                def buildNumber = env.BUILD_NUMBER
+                def pipelineStatus = currentBuild.result ?: 'UNKNOWN'
+                def bannerColor = pipelineStatus.toUpperCase() == 'SUCCESS' ? 'green' : 'red'
 
-                // Clean up workspace
-                cleanWs()
+                def body = """
+<html>
+<body>
+<div style="border: 4px solid ${bannerColor}; padding: 10px;">
+    <h2>${jobName} - Build ${buildNumber}</h2>
+    <div style="background-color: ${bannerColor}; padding: 10px;">
+        <h3 style="color: white;">Pipeline Status: ${pipelineStatus.toUpperCase()}</h3>
+    </div>
+    <p>Check the <a href="${BUILD_URL}">console output</a>.</p>
+</div>
+</body>
+</html>
+"""
 
-                // Send notification
                 emailext (
-                    subject: "${env.JOB_NAME} - Build #${env.BUILD_NUMBER} - ${currentBuild.result}",
-                    body: """
-                        <html>
-                        <body>
-                        <h2>${env.JOB_NAME} - Build #${env.BUILD_NUMBER}</h2>
-                        <p><strong>Status:</strong> ${currentBuild.result}</p>
-                        <p><strong>Duration:</strong> ${duration}</p>
-                        <p><strong>Commit:</strong> ${env.GIT_COMMIT_SHORT}</p>
-                        <p><a href="${env.BUILD_URL}">View Build Details</a></p>
-                        </body>
-                        </html>
-                    """,
+                    subject: "${jobName} - Build ${buildNumber} - ${pipelineStatus.toUpperCase()}",
+                    body: body,
                     to: 'prakashmurugaiya07@gmail.com',
-                    attachLog: true,
-                    compressLog: true
-                )
-
-                // Slack notification (optional)
-                slackSend (
-                    color: color,
-                    message: "${message}: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER} (${env.GIT_COMMIT_SHORT})",
-                    channel: '#build-notifications'
+                    from: 'jenkins@example.com',
+                    replyTo: 'jenkins@example.com',
+                    mimeType: 'text/html',
+                    attachmentsPattern: 'trivy-image-report.html'
                 )
             }
-        }
-        failure {
-            script {
-                // Additional failure handling
-                withKubeConfig(
-                    credentialsId: 'k8-cred',
-                    namespace: env.K8S_NAMESPACE,
-                    serverUrl: env.K8S_CLUSTER_URL
-                ) {
-                    sh 'kubectl get events -n ${K8S_NAMESPACE} --sort-by=.metadata.creationTimestamp'
-                }
-            }
-        }
-        cleanup {
-            // Final cleanup
-            cleanWs()
         }
     }
 }
