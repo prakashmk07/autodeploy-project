@@ -22,13 +22,23 @@ pipeline {
                 writeFile file: 'pom.xml', text: '''
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
          http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.example</groupId>
     <artifactId>boardshack</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>
+
+    <distributionManagement>
+        <repository>
+            <id>nexus</id>
+            <name>Nexus Release Repository</name>
+            <url>http://<your-nexus-ip>:8081/repository/maven-releases/</url>
+        </repository>
+    </distributionManagement>
+
     <build>
         <sourceDirectory>src</sourceDirectory>
         <plugins>
@@ -59,7 +69,40 @@ pipeline {
                 sh 'mvn test'
             }
         }
-    
+
+        stage('File System Scan') {
+            steps {
+                sh 'trivy fs --format table -o trivy-fs-report.html .'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                    withSonarQubeEnv('sonar') {
+                        sh '''
+                            set -e
+                            $SCANNER_HOME/bin/sonar-scanner \
+                            -Dsonar.projectName=BoardGame \
+                            -Dsonar.projectKey=BoardGame \
+                            -Dsonar.sources=. \
+                            -Dsonar.java.binaries=. \
+                            -Dsonar.login=$SONAR_TOKEN
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    script {
+                        waitForQualityGate abortPipeline: false
+                    }
+                }
+            }
+        }
 
         stage('Build') {
             steps {
@@ -70,7 +113,7 @@ pipeline {
         stage('Publish To Nexus') {
             steps {
                 withMaven(globalMavenSettingsConfig: 'global-settings', jdk: 'jdk17', maven: 'maven3') {
-                    sh 'mvn deploy'
+                    sh 'mvn deploy -X'
                 }
             }
         }
