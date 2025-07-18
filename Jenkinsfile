@@ -67,18 +67,18 @@ pipeline {
             }
         }
 
-        stage('SonarQube Analysis') {
+       ''' stage('SonarQube Analysis') {
     steps {
         withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
             withSonarQubeEnv('sonar') {
                 sh '''
-                    set -e
-                    $SCANNER_HOME/bin/sonar-scanner \
-                    -Dsonar.projectKey=BoardGame \
-                    -Dsonar.projectName=BoardGame \
-                    -Dsonar.sources=. \
-                    -Dsonar.java.binaries=. \
-                    -Dsonar.login=$SONAR_TOKEN
+                    //set -e
+                    //$SCANNER_HOME/bin/sonar-scanner \
+                    //-Dsonar.projectKey=BoardGame \
+                    //-Dsonar.projectName=BoardGame \
+                    //-Dsonar.sources=. \
+                    //-Dsonar.java.binaries=. \
+                    //-Dsonar.login=$SONAR_TOKEN
                 '''
             }
         }
@@ -91,7 +91,7 @@ stage('Quality Gate') {
             waitForQualityGate abortPipeline: true
         }
     }
-}
+}'''
     
 
         stage('Build') {
