@@ -67,30 +67,31 @@ pipeline {
         }
 
         stage('SonarQube Analysis') {
-            steps {
-                withSonarQubeEnv('sonar') {
-                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-    sh '''
-    set -e
-    $SCANNER_HOME/bin/sonar-scanner \
-    -Dsonar.projectName=BoardGame \
-    -Dsonar.projectKey=BoardGame \
-    -Dsonar.java.binaries=. \
-    -Dsonar.login=$SONAR_TOKEN
-'''
-
+    steps {
+        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+            withSonarQubeEnv('sonar') {
+                sh '''
+                    set -e
+                    $SCANNER_HOME/bin/sonar-scanner \
+                    -Dsonar.projectKey=BoardGame \
+                    -Dsonar.projectName=BoardGame \
+                    -Dsonar.sources=. \
+                    -Dsonar.java.binaries=. \
+                    -Dsonar.login=$SONAR_TOKEN
+                '''
+            }
+        }
+    }
 }
-                }
-            }
-        }
 
-        stage('Quality Gate') {
-            steps {
-                script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
-                }
-            }
+stage('Quality Gate') {
+    steps {
+        timeout(time: 5, unit: 'MINUTES') {
+            waitForQualityGate abortPipeline: true
         }
+    }
+}
+    
 
         stage('Build') {
             steps {
