@@ -69,12 +69,15 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sonar') {
-                    sh '''
-                        $SCANNER_HOME/bin/sonar-scanner \
-                        -Dsonar.projectName=BoardGame \
-                        -Dsonar.projectKey=BoardGame \
-                        -Dsonar.java.binaries=.
-                    '''
+                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+    sh '''
+        $SCANNER_HOME/bin/sonar-scanner \
+        -Dsonar.projectName=BoardGame \
+        -Dsonar.projectKey=BoardGame \
+        -Dsonar.java.binaries=. \
+        -Dsonar.login=$SONAR_TOKEN
+    '''
+}
                 }
             }
         }
