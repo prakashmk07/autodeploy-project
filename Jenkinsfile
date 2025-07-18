@@ -59,39 +59,6 @@ pipeline {
                 sh 'mvn test'
             }
         }
-
-        stage('File System Scan') {
-            steps {
-                sh 'trivy fs --scanners vuln --format table -o trivy-fs-report.html .'
-
-            }
-        }
-
-       ''' stage('SonarQube Analysis') {
-    steps {
-        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-            withSonarQubeEnv('sonar') {
-                sh '''
-                    //set -e
-                    //$SCANNER_HOME/bin/sonar-scanner \
-                    //-Dsonar.projectKey=BoardGame \
-                    //-Dsonar.projectName=BoardGame \
-                    //-Dsonar.sources=. \
-                    //-Dsonar.java.binaries=. \
-                    //-Dsonar.login=$SONAR_TOKEN
-                '''
-            }
-        }
-    }
-}
-
-stage('Quality Gate') {
-    steps {
-        timeout(time: 5, unit: 'MINUTES') {
-            waitForQualityGate abortPipeline: true
-        }
-    }
-}'''
     
 
         stage('Build') {
